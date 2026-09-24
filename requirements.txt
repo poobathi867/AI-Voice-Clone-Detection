@@ -4,3 +4,11 @@ websockets
 numpy
 scipy
 SpeechRecognition
+torch
+torchaudio
+librosa
+soundfile
+noisereduce
+vosk
+onnxruntime
+psycopg2-binary

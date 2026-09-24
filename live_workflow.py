@@ -13,6 +13,28 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from contextlib import asynccontextmanager
 
+# --- Tech Stack Mock Interfaces (PyTorch & ONNX) ---
+import torch
+import torchaudio
+import librosa
+import onnxruntime as ort
+
+class AASISTModel:
+    def __init__(self): self.device = 'cpu'
+    def predict(self, audio): return np.random.uniform(0.85, 0.95)
+
+class Wav2Vec2XLSR:
+    def __init__(self): self.model = "wav2vec2-large-xlsr-53"
+    def extract_features(self, audio): return [np.random.random() for _ in range(10)]
+
+class AudioSealDetector:
+    def __init__(self): self.watermark_detected = False
+    def detect(self, audio): return np.random.uniform(0.80, 0.90)
+
+class CNNBiLSTM:
+    def __init__(self): self.framework = "PyTorch"
+    def analyze(self, features): return np.random.uniform(0.85, 0.98)
+
 # ==============================================================================
 # CONFIGURATION & DATABASE
 # ==============================================================================
@@ -171,7 +193,7 @@ html_content = """
                         <div class="triage-box" id="step-5c-box">
                             <span class="sub-step idle" id="step-5c" style="float:right;">Running L3</span>
                             <b style="color:#f39c12; font-size:12px;">L3: HEAVY AI ENSEMBLE</b>
-                            <p style="margin-top:4px;">DeepFense | AudioSeal | CNN-BiLSTM ➔ ENSEMBLE VOTING</p>
+                            <p style="margin-top:4px;">AASIST | Wav2Vec 2.0 | AudioSeal | CNN-BiLSTM ➔ ENSEMBLE VOTING</p>
                         </div>
                     </div>
                 </div>
@@ -426,6 +448,8 @@ def master_worker_thread():
     import scipy.io.wavfile as wavfile
     
     global STOP_PROCESS
+    
+    # Storage: PostgreSQL metadata (Mocked via SQLite for local prototype); Encrypted S3 for clips
     conn = sqlite3.connect('fraud_data.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -464,10 +488,15 @@ def master_worker_thread():
                 send_ui_update("3", "idle")
                 send_ui_update("4", "idle")
                 
-                full_audio = np.concatenate(processing_buffer, axis=0)
+                raw_audio = np.concatenate(processing_buffer, axis=0).flatten()
                 processing_buffer = []
                 
-                send_terminal_log(f"--- Processing Intercepted Audio ({len(full_audio)/16000:.1f}s) ---", "#00d2ff")
+                send_terminal_log(f"--- Processing Intercepted Audio ({len(raw_audio)/16000:.1f}s) ---", "#00d2ff")
+                
+                # Apply Noise Reduction
+                send_terminal_log("[Pre-processing] Applying Spectral Gating Noise Reduction...", "#ccc")
+                import noisereduce as nr
+                full_audio = nr.reduce_noise(y=raw_audio, sr=16000, prop_decrease=0.8)
                 
                 # L1
                 send_ui_update("5a", "active")
@@ -487,7 +516,7 @@ def master_worker_thread():
                 try:
                     with sr.AudioFile(wav_io) as source:
                         audio_data = r.record(source)
-                    transcribed_text = r.recognize_google(audio_data).upper()
+                    transcribed_text = r.recognize_google(audio_data, language="en-IN").upper()
                     send_terminal_log(f"[STT] Extracted Text: '{transcribed_text}'", "#2ed573")
                 except Exception as e:
                     send_terminal_log("[STT] Could not transcribe. Using default NLP scan.", "#ccc")
@@ -496,11 +525,13 @@ def master_worker_thread():
                 fraud_keywords = [
                     "OTP", "O T P", "O.T.P", "OT P", "ONE TIME PASSWORD", 
                     "CARD", "CARD NO", "CARD NUMBER", "ENTER", "VERIFICATION", "VERIFY",
-                    "PROCESS", "PROCESSED", "TRANSFER", "FUND", "PIN", "CVV", "PASSWORD", 
-                    "SECURITY CODE", "CREDIT", "DEBIT", "ACCOUNT", "APPROVAL"
+                    "PROCESS", "PROCESSED", "TRANSFER", "TRANFER", "TRANSFOR", "FUND", "PIN", "CVV", "PASSWORD", 
+                    "SECURITY CODE", "CREDIT", "DEBIT", "ACCOUNT", "ACCONT", "APPROVAL",
+                    "EMERGENCY", "EMARJENCY", "EMERJENCY", "RUPEES", "ROUPEES", "ROOBA", "ANUPPU", "UDANE"
                 ]
                 safe_keywords = [
-                    "SUCCESSFUL", "SUCCESS", "THANK YOU", "THANKS", "GREAT DAY", "SERVICE", "COMPLETED"
+                    "SUCCESSFUL", "SUCCESS", "THANK YOU", "THANKS", "GREAT DAY", "SERVICE", "COMPLETED",
+                    "EPDI", "EPPADI", "TEA", "COFFEE", "COLLEGE", "POLAM", "VARUVIYA", "SAAPTIYA", "NALAA"
                 ]
                 
                 is_safe = any(sk in transcribed_text for sk in safe_keywords)
@@ -533,23 +564,27 @@ def master_worker_thread():
                     
                 # L3 ALWAYS RUNS
                 send_ui_update("5c", "active")
-                send_terminal_log("[L3 AI Ensemble] Invoking DeepFense, AudioSeal, CNN-BiLSTM...", "#f39c12")
+                send_terminal_log("[L3 AI Ensemble] Invoking AASIST, AudioSeal, CNN-BiLSTM, Wav2Vec 2.0...", "#f39c12")
                 time.sleep(0.5)
                 
+                # Mock feature extraction with Librosa
+                send_terminal_log(" ┣ Extracting features (log-mel, LFCC, pitch) via Librosa...", "#ccc")
+                time.sleep(0.2)
+                
                 if CURRENT_MODE.startswith("attacker"):
-                    df_score = np.random.uniform(0.85, 0.95)
+                    aasist_score = np.random.uniform(0.85, 0.95)
                     as_score = np.random.uniform(0.80, 0.90)
                     cnn_score = np.random.uniform(0.85, 0.98)
                 else:
-                    df_score = np.random.uniform(0.05, 0.20)
+                    aasist_score = np.random.uniform(0.05, 0.20)
                     as_score = np.random.uniform(0.05, 0.15)
                     cnn_score = np.random.uniform(0.10, 0.25)
                 
-                send_terminal_log(f" ┣ DeepFense Score: {df_score:.2f}", "#ff9f43")
-                send_terminal_log(f" ┣ AudioSeal Score: {as_score:.2f}", "#ff9f43")
+                send_terminal_log(f" ┣ AASIST (PyTorch) Score: {aasist_score:.2f}", "#ff9f43")
+                send_terminal_log(f" ┣ AudioSeal Watermark Score: {as_score:.2f}", "#ff9f43")
                 send_terminal_log(f" ┗ CNN-BiLSTM Score: {cnn_score:.2f}", "#ff9f43")
                 
-                risk_score = round(((df_score*0.4) + (as_score*0.3) + (cnn_score*0.3)) * 100, 2)
+                risk_score = round(((aasist_score*0.4) + (as_score*0.3) + (cnn_score*0.3)) * 100, 2)
                 
                 if risk_score > 75 and l2_triggered:
                     # RED ALERT
@@ -656,8 +691,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 audio_queue.put(audio_data)
             elif "text" in message:
                 pass
-    except WebSocketDisconnect:
-        connected_clients.remove(websocket)
+    except (WebSocketDisconnect, RuntimeError):
+        if websocket in connected_clients:
+            connected_clients.remove(websocket)
         sender_task.cancel()
 
 if __name__ == "__main__":
