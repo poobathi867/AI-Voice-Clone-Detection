@@ -2,7 +2,6 @@ import queue
 import threading
 import time
 import numpy as np
-import sounddevice as sd
 import asyncio
 import json
 import uvicorn
@@ -115,7 +114,8 @@ html_content = """
     <div class="header">
         <!-- Secret Toggle for Presentation (Clicking Title changes Mode) -->
         <h1 id="secret-toggle" style="cursor: pointer;" onclick="toggleSecretMode()" title="System Active">🎙️ Real-Time Processing Pipeline</h1>
-        <p style="color:#2ed573;">System Online. Speak into the mic to see live data flow.</p>
+        <p style="color:#2ed573;">System Online. Click the button below to allow mic access and start streaming.</p>
+        <button id="mic-btn" onclick="toggleMic()" style="padding: 10px 20px; font-size: 16px; background: #2ed573; color: white; border: none; border-radius: 5px; cursor: pointer; margin-top: 10px; font-weight: bold; box-shadow: 0 4px 15px rgba(46,213,115,0.4); transition: 0.3s;">🎙️ Start Microphone</button>
     </div>
 
     <div class="main-layout">
@@ -237,8 +237,66 @@ html_content = """
     </div>
 
     <script>
-        const ws = new WebSocket("ws://localhost:8000/ws");
+        // Dynamic WebSocket URL to support cloud hosting
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = protocol + "//" + window.location.host + "/ws";
+        const ws = new WebSocket(wsUrl);
+        ws.binaryType = "arraybuffer";
         const term = document.getElementById("term-console");
+
+        let audioContext;
+        let scriptNode;
+        let mediaStream;
+        let isRecording = false;
+
+        async function toggleMic() {
+            const btn = document.getElementById("mic-btn");
+            if (isRecording) {
+                stopAudioCapture();
+                btn.innerHTML = "🎙️ Start Microphone";
+                btn.style.background = "#2ed573";
+                isRecording = false;
+                term.innerHTML += `<p style="color:#ccc;"> > [Frontend] Microphone stopped.</p>`;
+            } else {
+                await startAudioCapture();
+                btn.innerHTML = "⏹️ Stop Microphone";
+                btn.style.background = "#ff4757";
+                isRecording = true;
+            }
+            term.scrollTop = term.scrollHeight;
+        }
+
+        async function startAudioCapture() {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                const source = audioContext.createMediaStreamSource(mediaStream);
+                
+                scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+                
+                scriptNode.onaudioprocess = function(audioProcessingEvent) {
+                    const inputBuffer = audioProcessingEvent.inputBuffer;
+                    const inputData = inputBuffer.getChannelData(0);
+                    
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(inputData.buffer); // Stream raw audio via WebSocket
+                    }
+                };
+                
+                source.connect(scriptNode);
+                scriptNode.connect(audioContext.destination);
+                term.innerHTML += `<p style="color:#2ed573;"> > [Frontend] Microphone started. Streaming audio to backend...</p>`;
+            } catch (err) {
+                console.error("Error accessing mic: ", err);
+                alert("Microphone access is required.");
+            }
+        }
+
+        function stopAudioCapture() {
+            if (scriptNode) scriptNode.disconnect();
+            if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+            if (audioContext) audioContext.close();
+        }
         
         // Wizard of Oz Controls
         // 1: Speech 1 -> Safe Context (Green Alert)
@@ -536,14 +594,6 @@ def master_worker_thread():
 
         audio_queue.task_done()
 
-def audio_callback(indata, frames, time_info, status):
-    global frames_buffer
-    if not STOP_PROCESS:
-        frames_buffer.append(indata.copy())
-        if len(frames_buffer) >= 50:
-            audio_queue.put(np.concatenate(frames_buffer, axis=0))
-            frames_buffer = []
-
 # ==============================================================================
 # FASTAPI SERVER
 # ==============================================================================
@@ -552,13 +602,9 @@ CURRENT_MODE = "attacker_safe"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     threading.Thread(target=master_worker_thread, daemon=True).start()
-    app.state.stream = sd.InputStream(samplerate=SAMPLE_RATE, blocksize=SAMPLES_PER_CHUNK, channels=1, callback=audio_callback)
-    app.state.stream.start()
     yield
     global STOP_PROCESS
     STOP_PROCESS = True
-    app.state.stream.stop()
-    app.state.stream.close()
     conn.close()
 
 app = FastAPI(lifespan=lifespan)
@@ -589,13 +635,32 @@ async def get_dashboard(): return HTMLResponse(html_content)
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     connected_clients.append(websocket)
+    
+    async def send_messages():
+        while True:
+            if not ws_queue.empty():
+                try:
+                    await websocket.send_text(json.dumps(ws_queue.get()))
+                except:
+                    break
+            await asyncio.sleep(0.05)
+            
+    sender_task = asyncio.create_task(send_messages())
+    
     try:
         while True:
-            if not ws_queue.empty(): await websocket.send_text(json.dumps(ws_queue.get()))
-            await asyncio.sleep(0.05)
+            message = await websocket.receive()
+            if "bytes" in message:
+                audio_data = np.frombuffer(message["bytes"], dtype=np.float32)
+                audio_data = audio_data.reshape(-1, 1)
+                audio_queue.put(audio_data)
+            elif "text" in message:
+                pass
     except WebSocketDisconnect:
         connected_clients.remove(websocket)
+        sender_task.cancel()
 
 if __name__ == "__main__":
-    print("\n[*] GLASS-BOX PIPELINE READY: http://localhost:8000\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="error")
+    port = int(os.environ.get("PORT", 8000))
+    print(f"\n[*] GLASS-BOX PIPELINE READY: http://localhost:{port}\n")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="error")
